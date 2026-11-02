@@ -1,0 +1,118 @@
+name: Build dsh-ios unsigned IPA
+
+# 鏀惧湪 nanansdfsf/dsh-ios-build 鐨?.github/workflows/build-ipa.yml
+# Actions 椤甸潰鐐?Run workflow锛岃窇瀹屽湪 Artifacts 閲屼笅 DSH-unsigned-ipa.zip
+# 杩欎釜浠撳簱鏄┖澹筹紝鏋勫缓鏃惰嚜宸?git clone everettjf/dsh-ios 鍒?repo/ 閲?
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_prefix:
+        description: 'Bundle ID 鍓嶇紑锛堢暀绌虹敤浣滆€呴粯璁?com.xnuapp锛?
+        required: false
+        default: 'com.xnuapp'
+      build_rootfs:
+        description: '閲嶅缓 guest rootfs锛堥娆″繀椤?true锛?
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 150
+
+    steps:
+      - name: 鐜鑷
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcode-select -p
+          ruby -v
+          echo "--- 蹇呴』鏄?arm64 + macOS 26 + Xcode 26 鍙婁互涓?---"
+
+      - name: 鎷変笂娓告簮鐮?        run: |
+          git clone --depth 1 https://github.com/everettjf/dsh-ios.git repo
+          cd repo
+          git log -1 --format='%H %ad %s'
+          ls -1
+
+      - name: 瀹夎 iSH-ARM64 鏋勫缓渚濊禆
+        run: |
+          brew install meson ninja lld
+          echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
+          export PATH="/opt/homebrew/opt/lld/bin:$PATH"
+          ld.lld --version
+          meson --version
+          ninja --version
+
+      - name: 瀹夎 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 娓呯┖ entitlements锛堝厤璐?Apple ID 甯︿笉浜?HealthKit 涓?PCC锛?        working-directory: repo
+        run: |
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0">' \
+            '<dict/>' \
+            '</plist>' > app/DSH.entitlements
+          cat app/DSH.entitlements
+
+      - name: 鏀?Bundle ID 鍓嶇紑
+        if: ${{ inputs.bundle_prefix != '' && inputs.bundle_prefix != 'com.xnuapp' }}
+        working-directory: repo
+        run: |
+          sed -i '' "s|^DSH_BUNDLE_ID_PREFIX = .*|DSH_BUNDLE_ID_PREFIX = ${{ inputs.bundle_prefix }}|" app/AppDSH.xcconfig
+          grep BUNDLE_ID app/AppDSH.xcconfig
+
+      - name: 缂栬瘧 iSH-ARM64 CLI 妯℃嫙鍣?        working-directory: repo
+        run: |
+          make emulator
+          ls -lh ish-arm64/build-arm64-release/ish
+
+      - name: 鏋勫缓 guest rootfs锛圓lpine 3.21 + Node 22 + dsh锛?        if: ${{ inputs.build_rootfs == 'true' }}
+        timeout-minutes: 100
+        working-directory: repo
+        run: |
+          make rootfs
+          ls -lh build/root.tar.gz
+          cat build/root.tar.gz.sha256
+
+      - name: 鏈鍚嶆瀯寤?DSH.app
+        working-directory: repo
+        run: |
+          rm -rf build/dd
+          xcodebuild -project DSH.xcodeproj \
+            -scheme DSH \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DSH_DEVELOPMENT_TEAM="" \
+            build
+
+      - name: 鎵撴湭绛惧悕 IPA
+        working-directory: repo
+        run: |
+          APP="$(find build/dd/Build/Products/Release-iphoneos -maxdepth 1 -name 'DSH.app' | head -1)"
+          echo "APP=$APP"
+          test -d "$APP" || { echo "娌℃壘鍒?DSH.app"; find build/dd/Build/Products -maxdepth 2 -type d; exit 1; }
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qry DSH-unsigned.ipa Payload
+          ls -lh DSH-unsigned.ipa
+          shasum -a 256 DSH-unsigned.ipa
+
+      - name: 涓婁紶浜х墿
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH-unsigned-ipa
+          path: repo/out/DSH-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
