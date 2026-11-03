@@ -43,6 +43,31 @@ jobs:
           cd repo
           git log -1 --format='%H %s'
 
+      - name: Patch uname.c for macOS host
+        working-directory: repo
+        run: |
+          python3 - <<'PY'
+          import re
+          p = 'ish-arm64/kernel/uname.c'
+          s = open(p).read()
+          s = s.replace("    struct utsname real_uname;\n",
+                        "    struct utsname real_uname;\n    memset(&real_uname, 0, sizeof(real_uname));\n")
+          subs = [
+              (r'strcpy\(uts->system, "Linux"\);', 'snprintf(uts->system, sizeof(uts->system), "%s", "Linux");'),
+              (r'strcpy\(uts->hostname, hostname\);', 'snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);'),
+              (r'strcpy\(uts->release, "4\.20\.69-ish"\);', 'snprintf(uts->release, sizeof(uts->release), "%s", "4.20.69-ish");'),
+              (r'strcpy\(uts->arch, "aarch64"\);', 'snprintf(uts->arch, sizeof(uts->arch), "%s", "aarch64");'),
+              (r'strcpy\(uts->arch, "i686"\);', 'snprintf(uts->arch, sizeof(uts->arch), "%s", "i686");'),
+              (r'strcpy\(uts->domain, "\(none\)"\);', 'snprintf(uts->domain, sizeof(uts->domain), "%s", "(none)");'),
+          ]
+          for pat, rep in subs:
+              s, n = re.subn(pat, lambda m: rep, s)
+              print('patched', n, pat)
+          open(p, 'w').write(s)
+          PY
+          git diff --stat
+          grep -n "snprintf(uts->" ish-arm64/kernel/uname.c
+
       - name: Install build tooling
         run: |
           brew install meson ninja lld libarchive pkg-config
