@@ -1,7 +1,6 @@
 name: Build dsh-ios unsigned IPA
 
-# Manual-only workflow. Builds everettjf/dsh-ios on a macOS arm64 runner and
-# uploads an unsigned IPA as an artifact.
+# Builds everettjf/dsh-ios on a macOS arm64 runner and uploads an unsigned IPA.
 on:
   workflow_dispatch:
     inputs:
@@ -46,12 +45,19 @@ jobs:
 
       - name: Install build tooling
         run: |
-          brew install meson ninja lld
+          brew install meson ninja lld libarchive pkg-config
+          ARCH_PREFIX="$(brew --prefix libarchive)"
+          echo "libarchive prefix: $ARCH_PREFIX"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$ARCH_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$ARCH_PREFIX/lib ${LDFLAGS:-}" >> "$GITHUB_ENV"
+          echo "CPPFLAGS=-I$ARCH_PREFIX/include ${CPPFLAGS:-}" >> "$GITHUB_ENV"
           export PATH="/opt/homebrew/opt/lld/bin:$PATH"
+          export PKG_CONFIG_PATH="$ARCH_PREFIX/lib/pkgconfig"
           ld.lld --version
           meson --version
           ninja --version
+          pkg-config --modversion libarchive && echo "libarchive: pkg-config OK"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -74,7 +80,15 @@ jobs:
 
       - name: Build emulator (ish-arm64)
         working-directory: repo
-        run: make emulator
+        run: |
+          make emulator
+          ls -la ish-arm64/build-arm64-release/tools || true
+
+      - name: Build fakefs tools
+        working-directory: repo
+        run: |
+          ninja -C ish-arm64/build-arm64-release tools/fakefsify
+          ls -la ish-arm64/build-arm64-release/tools
 
       - name: Build guest rootfs
         if: ${{ inputs.build_rootfs != 'false' }}
